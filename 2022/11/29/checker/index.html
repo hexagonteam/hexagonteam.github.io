@@ -1,0 +1,436 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="pragma" content="no-cache">
+  <meta http-equiv="cache-control" content="no-cache">
+  <meta http-equiv="expires" content="0">
+  
+  <title>[HITCON2022 - Checker] How to reverse a metamorphic windows kernel driver statically | Hexagon</title>
+  <meta name="author" content="22sh">
+  
+  <meta name="description" content="This is a long write-up. It’s not particularly technical, I just wanted to show how I reverse-engineering this challenge fully statically using Binary Ninja.
+
+The archive contains two files, check_drv.sys and checker.exe, so we can already guess that the .exe is a user-mode application making requests (spoil : IRPs) to the .sys kernel driver for flag verification.
+Since we can make the (educated) guess that most of the code is inside the driver, let’s take a quick look inside checker.exe. Quick tip if you’re looking for the call to the main function inside the _start in a Portable Executable :">
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+
+  <meta property="og:title" content="[HITCON2022 - Checker] How to reverse a metamorphic windows kernel driver statically"/>
+  <meta property="og:site_name" content="Hexagon"/>
+
+  
+    <meta property="og:image" content=""/>
+  
+
+  
+  
+    <link href="/favicon.png" rel="icon">
+  
+  
+  <link rel="stylesheet" href="/css/bootstrap.min.css" media="screen" type="text/css">
+  <link rel="stylesheet" href="/css/font-awesome.css" media="screen" type="text/css">
+  <link rel="stylesheet" href="/css/style.css" media="screen" type="text/css">
+  <link rel="stylesheet" href="/css/responsive.css" media="screen" type="text/css">
+  <link rel="stylesheet" href="/css/highlight.css" media="screen" type="text/css">
+  <link rel="stylesheet" href="/css/google-fonts.css" media="screen" type="text/css">
+  <!--[if lt IE 9]><script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script><![endif]-->
+
+  <script src="/js/jquery-2.0.3.min.js"></script>
+
+  <!-- analytics -->
+  
+<script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+  ga('create', 'UA-70812759-1', 'auto');
+  ga('send', 'pageview');
+</script>
+
+
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "//hm.baidu.com/hm.js?cb5448498d7169c668b07c2b255d62c1";
+  var s = document.getElementsByTagName("script")[0]; 
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+<meta name="generator" content="Hexo 6.3.0"></head>
+
+ <body>  
+  <nav id="main-nav" class="navbar navbar-inverse navbar-fixed-top" role="navigation">
+    <div class="container">
+      <button type="button" class="navbar-header navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+		<span class="sr-only">Toggle navigation</span>
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+      </button>
+	  <a class="navbar-brand" href="/">Hexagon</a>
+      <div class="collapse navbar-collapse nav-menu">
+		<ul class="nav navbar-nav">
+		  
+		  <li>
+			<a href="/blog" title="CTFs and other stuffs">
+			  <i class="fa fa-archive"></i>Blog
+			</a>
+		  </li>
+		  
+		  <li>
+			<a href="/hof" title="Hall of Fame">
+			  <i class="fa fa-trophy"></i>Hall of Fame
+			</a>
+		  </li>
+		  
+		  <li>
+			<a href="/members" title="About us">
+			  <i class="fa fa-user"></i>Members
+			</a>
+		  </li>
+		  
+		</ul>
+      </div>
+    </div> <!-- container -->
+</nav>
+<div class="clearfix"></div>
+
+  <div class="container">
+  	<div class="content">
+    	 
+
+
+	
+		<div class="page-header">
+			<h1> [HITCON2022 - Checker] How to reverse a metamorphic windows kernel driver statically</h1>
+		</div>
+	
+
+
+
+<div class="row post">
+	<!-- cols -->
+	
+	<div id="top_meta"></div>
+	<div class="col-md-9">
+	
+
+	<!-- content -->
+	<div class="mypage">		
+	  		
+
+	  <p>This is a long write-up. It’s not particularly technical, I just wanted to show how I reverse-engineering this challenge fully statically using Binary Ninja.</p>
+<p><img src="/hitcon2022/Untitled.png" alt="Untitled"></p>
+<p>The archive contains two files, <code>check_drv.sys</code> and <code>checker.exe</code>, so we can already guess that the <code>.exe</code> is a user-mode application making requests (spoil : <a target="_blank" rel="noopener" href="https://gprivate.com/621hb">IRPs</a>) to the <code>.sys</code> kernel driver for flag verification.</p>
+<p>Since we can make the (educated) guess that most of the code is inside the driver, let’s take a quick look inside <code>checker.exe</code>. Quick tip if you’re looking for the call to the <code>main</code> function inside the <code>_start</code> in a Portable Executable :</p>
+<span id="more"></span>
+
+<p><img src="/hitcon2022/Untitled%201.png" alt="Untitled"></p>
+<p>It’s here.</p>
+<p>Single click on <code>sub_140001070</code> and press <code>y</code>. Change the <code>int64_t sub_140001070()</code> into <code>int32_t main(int32_t argc, char** argv)</code> (it will both change the type and rename it). After a little renaming, we get the following function :</p>
+<p><img src="/hitcon2022/Untitled%202.png" alt="Untitled"></p>
+<p>It seems that <code>checker.exe</code> sends a <code>0x222080</code> control code to the <code>hitcon_checker</code> device… and that’s it. It doesn’t take input and doesn’t send any buffer to the device. It only prints “wrong” if the driver returns <code>0</code> in the input buffer, “correct” otherwise. So I guess we’ll have to check the driver itself and see what it’s all about.</p>
+<p>Open the <code>checker.sys</code> in your favorite disassembler. In case you’re wondering where the call to <code>DriverEntry</code> is :</p>
+<p><img src="/hitcon2022/Untitled%203.png" alt="Untitled"></p>
+<p>It’s here.</p>
+<p>And it’s ugly.</p>
+<p><img src="/hitcon2022/Untitled%204.png" alt="Untitled"></p>
+<p>There’s a bunch of additional XORs that we’ll get onto much later but first let us make more sens out of the variables of the function.</p>
+<p>Before re-typing and re-naming <code>uint64_t sub_140001b50(void* arg1)</code>  to <code>NTSTATUS DriverEntry(DRIVER_OBJECT* DriverObject, UNICODE_STRING *RegistryPath)</code>, we need to actually define these types. Easy stuff with Binary Ninja, just download the Windows kernel headers (for example from ‣), click “Types” in the left sidebar, click anywhere in the types panel and press <code>i</code> before writing the following :</p>
+<p><img src="/hitcon2022/Untitled%205.png" alt="Untitled"></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;wdm.h&gt;</span></span></span><br><span class="line"></span><br><span class="line"><span class="keyword">typedef</span> DEVICE_OBJECT lol1;</span><br><span class="line"><span class="keyword">typedef</span> DRIVER_OBJECT lol2;</span><br><span class="line"><span class="keyword">typedef</span> IRP lol3;</span><br><span class="line"><span class="keyword">typedef</span> UNICODE_STRING lol4;</span><br><span class="line"><span class="keyword">typedef</span> OB_CALLBACK_REGISTRATION lol5;</span><br><span class="line"><span class="keyword">typedef</span> OB_OPERATION_REGISTRATION lol6;</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">-isystem /home/osef/Documents/winsdk<span class="number">-10</span>/Include/<span class="number">10.0</span><span class="number">.16299</span><span class="number">.0</span>/km -isystem /home/osef/Documents/winsdk<span class="number">-10</span>/Include/<span class="number">10.0</span><span class="number">.16299</span><span class="number">.0</span>/km/crt -isystem /home/osef/Documents/winsdk<span class="number">-10</span>/Include/<span class="number">10.0</span><span class="number">.16299</span><span class="number">.0</span>/shared -D_AMD64_</span><br></pre></td></tr></table></figure>
+
+<p>Remember to change the path to the headers at the bottom. If you’re using Linux, you’ll need to manually create two or three symlinks inside the header directories because of inconsistent letter cases in some includes. Binary Ninja will recursively define the requested types. I don’t know how to tell it to import ALL types from <code>wdm.h</code>, hence the dummy typedefs.</p>
+<p>NOW we can rename <code>uint64_t sub_140001b50(void* arg1)</code>  to <code>NTSTATUS DriverEntry(DRIVER_OBJECT* DriverObject, UNICODE_STRING *RegistryPath)</code>, and the function makes slightly more sens :</p>
+<p><img src="/hitcon2022/Untitled%206.png" alt="Untitled"></p>
+<p>Using the <code>y</code> keybinding, we can directly change <code>sub_140001000</code>‘s name and type to <code>void DriverUnload(DRIVER_OBJECT *DriverObject)</code>.</p>
+<p>Taking a look at <code>sub_140001110</code> :</p>
+<p><img src="/hitcon2022/Untitled%207.png" alt="Untitled"></p>
+<p>That the function creating the <code>hitcon_checker</code> device (with a comfy symlink to it). Using the <code>y</code> keybinding, do the following changes :</p>
+<table>
+<thead>
+<tr>
+<th>int64_t sub_140001110(void* arg1)</th>
+<th>NTSTATUS CreateHitconDevice(DRIVER_OBJECT* DriverObject)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>data_140003158</td>
+<td>UNICODE_STRING us_device_symlink</td>
+</tr>
+<tr>
+<td>data_140003148</td>
+<td>UNICODE_STRING us_device_name</td>
+</tr>
+<tr>
+<td>data_140003140</td>
+<td>DEVICE_OBJECT *HitconDevice</td>
+</tr>
+</tbody></table>
+<p>Here’s the result :</p>
+<p><img src="/hitcon2022/Untitled%208.png" alt="Untitled"></p>
+<p>Inside <code>sub_140001040</code></p>
+<p><img src="/hitcon2022/Untitled%209.png" alt="Untitled"></p>
+<p>We have a lot of “unused” stack variables, so these probably are a structure that is mistyped. Either way, there’s a call to <code>[ObRegisterCallbacks](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obregistercallbacks)</code> so that’s confirmed. One variable, <code>var_60</code>, is assigned <code>PsProcessType</code>, meaning that the driver is registering a callback to handle operations on processes. Let’s change <code>var_40</code>‘s type to <code>[OB_CALLBACK_REGISTRATION](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_ob_callback_registration)</code> and it’s name to <code>ObCallbackRegistration</code>. The function is now slightly more readable :</p>
+<p><img src="/hitcon2022/Untitled%2010.png" alt="Untitled"></p>
+<p>But we still have some “unused” stack variables so let’s do the following changes :</p>
+<table>
+<thead>
+<tr>
+<th>int64_t (* const var_60)()</th>
+<th>OB_OPERATION_REGISTRATION ObOperationRegistration</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>int128_t var_18</td>
+<td>UNICODE_STRING us_altitude</td>
+</tr>
+<tr>
+<td>int128_t zmm0</td>
+<td>UNICODE_STRING us_altitude2</td>
+</tr>
+<tr>
+<td>int64_t var_88</td>
+<td>int64_t Context[0x5] (the RegistrationContext is driver-dependent, this is just a guess)</td>
+</tr>
+<tr>
+<td>int64_t rax</td>
+<td>NTSTATUS ret</td>
+</tr>
+<tr>
+<td>data_140003168</td>
+<td>PVOID RegistrationHandle</td>
+</tr>
+<tr>
+<td>int64_t sub_140001430(int64_t, int32_t*)</td>
+<td>OB_PREOP_CALLBACK_STATUS PreProcCallback(PVOID, POB_PRE_OPERATION_INFORMATION PreOpInformation)</td>
+</tr>
+<tr>
+<td>NTSTATUS sub_140001040()</td>
+<td>NTSTATUS RegisterCallback()</td>
+</tr>
+</tbody></table>
+<p>And the function is now much more readable :</p>
+<p><img src="/hitcon2022/Untitled%2011.png" alt="Untitled"></p>
+<p>Of course all of this wasn’t needed ; but still, it’s good practice.</p>
+<p>Let’s get into the <code>PreProcCallback</code> function. To make it a little easier to read, we can override Windows’s <code>typedef ULONG OB_OPERATION</code> with the following type :</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">enum</span> _<span class="title">OB_OPERATION</span> &#123;</span></span><br><span class="line">	OB_OPERATION_HANDLE_CREATE = <span class="number">1</span>,</span><br><span class="line">	OB_OPERATION_HANDLE_DUPLICATE = <span class="number">2</span></span><br><span class="line">&#125; OB_OPERATION;</span><br></pre></td></tr></table></figure>
+
+<p>Change <code>int32_t rax_2</code> and <code>int32_t* rcx_2</code> to <code>OB_OPERATION op</code> and <code>OB_PRE_CREATE_HANDLE_INFORMATION* params</code>, respectively, to get :</p>
+<p><img src="/hitcon2022/Untitled%2012.png" alt="Untitled"></p>
+<p>By looking into <code>data_140003170</code>, we that it’s a <code>0x10000</code> (<code>65536</code>)-long <code>uint8_t</code> array. Since the PIDs on Windows range from <code>0</code> to <code>65535</code>, we can be pretty confident when re-typing and renaming <code>data_140003170</code> to <code>uint8_t PIDArray[0x10000]</code>. So this little function checks if the process that triggered the callback has an entry in <code>PIDArray</code> that is not <code>0</code> and declines further handle creation and duplication iff the original requested access rights has the lowest bit set to <code>1</code>. To this day, I don’t know what the purpose of this function is (probably just preventing processes that already opened a handle to the device to create other handles to it, but I don’t get what this achieves). If you know more about this, please tell me.</p>
+<p>After inserting a few comments, the <code>DriverEntry</code> is now a little bit cleaner (I used High Level IL to hide the boring casts) :</p>
+<p><img src="/hitcon2022/Untitled%2013.png" alt="Untitled"></p>
+<p>There’s still some stuff to resolve.</p>
+<p>Let’s take a look inside the <code>sub_1400011b0</code>, the function that is supposed to handle those IRPs.</p>
+<p><img src="/hitcon2022/Untitled%2014.png" alt="Untitled"></p>
+<p>It really isn’t big and there’s a cute little switch with 9 cases. Before looking at the code, let’s change it’s type and name to <code>NTSTATUS DispatchXXX(DEVICE_OBJECT* DeviceObject, IRP* Irp)</code> (how do I know ? <a target="_blank" rel="noopener" href="https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_driver_object">Because I do</a>).</p>
+<p><img src="/hitcon2022/Untitled%2015.png" alt="Untitled"></p>
+<p>Inside the function, Binary Ninja incorrectly identifies (I’m <em>pretty</em> sure) the function at <code>0x140001ed0</code> as being the <code>Concurrency::details::VirtualProcessor::GetExecutingContext</code> function from the <a target="_blank" rel="noopener" href="https://learn.microsoft.com/en-us/cpp/parallel/concrt/concurrency-runtime?view=msvc-170">C++ concurrency runtime</a>. If we look at it’s content, it only loads the <code>qword</code> at offset <code>0xb8</code> from the input pointer. At offset <code>0xb8</code> of the <code>IRP</code> structure resides a <code>union</code> with a <code>struct _IO_STACK_LOCATION* CurrentStackLocation</code> and a <code>ULONG PacketType</code>. Since it loads a <code>qword</code>, and that this <code>qword</code> is later used as a pointer for dereferencing several values, we can guess that the <code>union</code> will consist of the <code>CurrentStackLocation</code> field at runtime. So <code>Concurrency::details::VirtualProcessor::GetExecutingContext</code> is in fact <code>[IoGetCurrentIrpStackLocation](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetcurrentirpstacklocation)</code>. Let’s fix this.</p>
+<p>Let’s also fix the <code>PsGetCurrentProcessId</code> (because I forgot to do it when going over <code>PreProcCallback</code>) so that it doesn’t take any argument (<a target="_blank" rel="noopener" href="https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentprocessid">because it doesn’t</a>).</p>
+<p>To speed up a little, here’s what we have :</p>
+<p><img src="/hitcon2022/Untitled%2016.png" alt="Untitled"></p>
+<p>and the end of the function is :</p>
+<p><img src="/hitcon2022/Untitled%2017.png" alt="Untitled"></p>
+<p>In a nutshell, if after all the cases have been executed, the <code>flag</code> global array starts with “hitcon”, we win (remember the end of the <code>main</code> function in the user mode application ?).</p>
+<p>Before jumping into the <code>myterious_bunch_of_xors</code> function, we need to finish unraveling the <code>DriverEntry</code>.</p>
+<p>Remember :</p>
+<p><img src="/hitcon2022/Untitled%2018.png" alt="Untitled"></p>
+<p>Calling <code>MmGetPhysicalAddress</code> with a virtual address as argument (e.g. the address of <code>flag</code>) returns the physical address that it maps to. <code>MmMapIoSpace</code> does the “contrary” ; it takes a physical address range as input, create a new virtual mapping to the physical address range. This means that after the call to <code>MmMapIoSpace</code>, there will be at least two virtual pages that are mapped to the same physical memory region.</p>
+<p>In this case, the driver maps <code>0x1000</code> (<code>4096</code>) bytes of new virtual memory to the same physical region that <code>flag</code> was mapped onto. It then stores the first address of this new mapping inside <code>data_140013170</code>, and does the same thing for the <code>PreProcCallback</code> function and <code>data_140013188</code>.</p>
+<p><code>data_140013178</code> also maps onto the same physical memory region as <code>flag + 0x30</code> and <code>data_140013180</code> onto the same physical memory region as <code>PreProcCallback + 0x700</code>, namely <code>sub_140001b30</code> :</p>
+<p><img src="/hitcon2022/Untitled%2019.png" alt="Untitled"></p>
+<p>Very simple function. We’ll call it <code>dec</code> as in “decryption” !</p>
+<p>Since we know that <code>data_140013170</code> always points to <code>flag</code>, let’s patch the binary, And do the same for <code>data_140013178</code>, <code>data_140013188</code> and <code>data_140013180</code>, shall we ?</p>
+<p>If you look at all the code refs to <code>data_140013170</code>, these are all (except for the first one) <code>mov rbx, qword [rel data_140013170]</code>, so they just load the address of <code>flag</code> into <code>rbx</code>. We’re going to replace them by an <code>lea rbx, qword [rel flag]</code>.</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># /!\ Very important when messing around with the Binary Ninja API /!\</span></span><br><span class="line">bv.begin_undo_actions()</span><br><span class="line"></span><br><span class="line">flag_addr = <span class="number">0x140003000</span></span><br><span class="line"><span class="comment"># Get all code refs to `data_140013170`.</span></span><br><span class="line"><span class="keyword">for</span> r <span class="keyword">in</span> bv.get_data_var_at(<span class="number">0x140013170</span>).code_refs:</span><br><span class="line">    inst = r.llil</span><br><span class="line"></span><br><span class="line">    <span class="comment"># Make sure we patching the right instructions</span></span><br><span class="line">    <span class="keyword">if</span> inst.operation == LowLevelILOperation.LLIL_SET_REG <span class="keyword">and</span> inst.dest.name == <span class="string">&#x27;rbx&#x27;</span>:</span><br><span class="line">        delta = flag_addr - inst.address</span><br><span class="line"></span><br><span class="line">        <span class="comment"># `lea rbx, qword [rel flag]` is 7 bytes long.</span></span><br><span class="line">        asm = <span class="string">f&quot;lea rbx, [rip+<span class="subst">&#123;delta - <span class="number">7</span>:#x&#125;</span>]&quot;</span></span><br><span class="line">        <span class="built_in">print</span>(<span class="string">&quot;Patching&quot;</span>, <span class="built_in">hex</span>(inst.address), <span class="built_in">str</span>(inst), <span class="string">&quot;with&quot;</span>, asm)</span><br><span class="line">        asm = bv.arch.assemble(asm)</span><br><span class="line">        bv.write(inst.address, asm)</span><br><span class="line"></span><br><span class="line"><span class="comment"># /!\ Very important when messing around with the Binary Ninja API /!\</span></span><br><span class="line">bv.commit_undo_actions()</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;Done&quot;</span>)</span><br></pre></td></tr></table></figure>
+
+<p>Let’s turn this into a function to apply this to the other virtual address duplicate :</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="comment"># /!\ Very important when messing around with the Binary Ninja API /!\</span></span><br><span class="line">bv.begin_undo_actions()</span><br><span class="line"></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">patch_vaddr_instructions</span>(<span class="params">original_addr, vaddr_ptr</span>):</span><br><span class="line">    <span class="keyword">for</span> r <span class="keyword">in</span> bv.get_data_var_at(vaddr_ptr).code_refs:</span><br><span class="line">        inst = r.llil</span><br><span class="line">        <span class="keyword">if</span> inst.operation == LowLevelILOperation.LLIL_SET_REG:</span><br><span class="line">            delta = original_addr - inst.address</span><br><span class="line"></span><br><span class="line">            <span class="comment"># `lea reg, qword [rel pos]` is 7 bytes long.</span></span><br><span class="line">            asm = <span class="string">f&quot;lea <span class="subst">&#123;inst.dest.name&#125;</span>, [rip+<span class="subst">&#123;delta - <span class="number">7</span>:#x&#125;</span>]&quot;</span></span><br><span class="line">            <span class="built_in">print</span>(<span class="string">&quot;Patching&quot;</span>, <span class="built_in">hex</span>(inst.address), <span class="built_in">str</span>(inst), <span class="string">&quot;with&quot;</span>, asm)</span><br><span class="line">            asm = bv.arch.assemble(asm)</span><br><span class="line">            bv.write(inst.address, asm)</span><br><span class="line"></span><br><span class="line">flag_addr = bv.get_symbol_by_raw_name(<span class="string">&quot;flag&quot;</span>).address</span><br><span class="line">patch_vaddr_instructions(flag_addr, <span class="number">0x140013170</span>)</span><br><span class="line">patch_vaddr_instructions(flag_addr + <span class="number">0x30</span>, <span class="number">0x140013178</span>)</span><br><span class="line"></span><br><span class="line">proccbk_addr = bv.get_symbol_by_raw_name(<span class="string">&quot;PreProcCallback&quot;</span>).address</span><br><span class="line">patch_vaddr_instructions(proccbk_addr + <span class="number">0x700</span>, <span class="number">0x140013180</span>)</span><br><span class="line">patch_vaddr_instructions(proccbk_addr, <span class="number">0x140013188</span>)</span><br><span class="line"></span><br><span class="line"><span class="comment"># /!\ Very important when messing around with the Binary Ninja API /!\</span></span><br><span class="line">bv.commit_undo_actions()</span><br><span class="line"><span class="built_in">print</span>(<span class="string">&quot;Done&quot;</span>)</span><br></pre></td></tr></table></figure>
+
+<p>Wanna see a magic trick ? Go inside the <code>myterious_bunch_of_xors</code> function :</p>
+<p><img src="/hitcon2022/Untitled%2020.png" alt="Untitled"></p>
+<p>Now run the script and watch all these indirections just…</p>
+<p><img src="/hitcon2022/Untitled%2021.png" alt="Untitled"></p>
+<p>… huh ? Oh no ! Binary Ninja’s optimisations automatically replace the bytes from the <code>dec</code> function by their value, despite them being changed at runtime.</p>
+<p>I went on Binary Ninja’s official Slack and the very same day I’m writing this, a guy had the same problem :</p>
+<p><img src="/hitcon2022/Untitled%2022.png" alt="Untitled"></p>
+<p>There was some nice answers, like this one :</p>
+<p><img src="/hitcon2022/Untitled%2023.png" alt="Untitled"></p>
+<p>The only real solution was this :</p>
+<p><img src="/hitcon2022/Untitled%2024.png" alt="Untitled"></p>
+<p>I’ve tried several but with no success. I asked how to do it, I’m still without answers :&#x2F;</p>
+<p>We’re going to have to make this “virtual address unraveling” for all for of them, except <code>dec</code>. Let’s comment this out :</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># patch_vaddr_instructions(proccbk_addr + 0x700, 0x140013180)</span></span><br></pre></td></tr></table></figure>
+
+<p>So we’ll have to stick to</p>
+<p><img src="/hitcon2022/Untitled%2025.png" alt="Untitled"></p>
+<p>And</p>
+<p><img src="/hitcon2022/Untitled%2026.png" alt="Untitled"></p>
+<p>This. It could be better.</p>
+<p>Since it seems to be used as an array of XOR keys in <code>myterious_bunch_of_xors</code>, let’s change <code>data_140003030</code> to <code>uint8_t key_array[0x100]</code>. Why <code>0x100</code> ? I just selected everything from <code>0x140003030</code> to the next data label and BInja kindly display the size of the selection in bytes at the bottom right corner :</p>
+<p><img src="/hitcon2022/Untitled%2027.png" alt="Untitled"></p>
+<p>So it seems that the driver is self-modifying. The only way it’s able to achieve this without triggering a fault is by setting the bit 16 of the <code>CR0</code> register to <code>0</code> in <code>sub_140001490</code> et re-setting it to <code>1</code> later in <code>sub_1400014b0</code>:</p>
+<p><img src="/hitcon2022/Untitled%2028.png" alt="Untitled"></p>
+<p>What this achieves is that <a target="_blank" rel="noopener" href="https://en.wikipedia.org/wiki/Control_register#CR0">it allows code running in ring 0 to write to read-only pages</a>. So let’s call these two functions <code>DisableWP</code> and <code>EnableWP</code>.</p>
+<h2 id="Actually-solving-the-challenge"><a href="#Actually-solving-the-challenge" class="headerlink" title="Actually solving the challenge"></a>Actually solving the challenge</h2><p>Back into <code>myterious_bunch_of_xors</code>. The function takes an <code>int32_t</code> as argument that seems to be the offset in <code>key_array</code> from which we’ll XOR the <code>dec</code> function, and, by looking at the code in the switch cases of <code>DispatchXXX</code> this argument can only be one of <code>[0x00, 0x20, 0x40, 0x60, 0x80, 0xa0, 0xc0, 0xe0]</code>, depending on the value of the IRP that was sent. At this moment, I just made the educated guess that the IRPs must be sent in a specific order to keep the <code>dec</code> coherent.</p>
+<p>Let’s write a function to do the decryption.</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># /!\ Very important when messing around with the Binary Ninja API /!\</span></span><br><span class="line">bv.begin_undo_actions()</span><br><span class="line"></span><br><span class="line"><span class="comment"># Get those addresses.</span></span><br><span class="line">dec_addr = bv.get_symbol_by_raw_name(<span class="string">&quot;dec&quot;</span>).address</span><br><span class="line">proccbk_addr = bv.get_symbol_by_raw_name(<span class="string">&quot;PreProcCallback&quot;</span>).address</span><br><span class="line">key_array_addr = bv.get_symbol_by_raw_name(<span class="string">&quot;key_array&quot;</span>).address</span><br><span class="line"></span><br><span class="line"><span class="comment"># Disassemble and lift to LLIL.</span></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">disass</span>(<span class="params">buf</span>):</span><br><span class="line">    new_bv = binaryview.BinaryView.new(buf)</span><br><span class="line">    new_bv.add_function(<span class="number">0</span>, plat=bv.platform)</span><br><span class="line">    <span class="keyword">return</span> <span class="string">&#x27;\n&#x27;</span>.join(<span class="built_in">map</span>(<span class="built_in">str</span>,</span><br><span class="line">        new_bv.get_function_at(<span class="number">0</span>).low_level_il.instructions))</span><br><span class="line"></span><br><span class="line"><span class="comment"># Do what `DriverEntry` does on `dec`, basically.</span></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">do_initial_decryption</span>():</span><br><span class="line">    buf = Transform[<span class="string">&#x27;XOR&#x27;</span>].encode(bv.read(dec_addr, <span class="number">16</span>), &#123;<span class="string">&#x27;key&#x27;</span>: bv.read(proccbk_addr, <span class="number">16</span>)&#125;)</span><br><span class="line">    buf = Transform[<span class="string">&#x27;XOR&#x27;</span>].encode(buf, &#123;<span class="string">&#x27;key&#x27;</span>: bv.read(proccbk_addr + <span class="number">16</span>, <span class="number">16</span>)&#125;)</span><br><span class="line">    <span class="keyword">return</span> buf</span><br><span class="line"></span><br><span class="line"><span class="comment"># Do what the first and last do in `myterious_bunch_of_xors`.</span></span><br><span class="line"><span class="comment"># But only the start (or only the end, depending on the offset).</span></span><br><span class="line"><span class="comment"># (The last part is the same as the first but with `offset := offset + 16`.</span></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">do_decrypt</span>(<span class="params">buf, offset</span>):</span><br><span class="line">    <span class="keyword">assert</span>(<span class="built_in">len</span>(buf) == <span class="number">16</span>)</span><br><span class="line">    buf = Transform[<span class="string">&#x27;XOR&#x27;</span>].encode(buf,</span><br><span class="line">        &#123;<span class="string">&#x27;key&#x27;</span> : bv.read(key_array_addr + offset, <span class="number">16</span>)&#125;)</span><br><span class="line">    <span class="keyword">return</span> buf</span><br><span class="line"></span><br><span class="line">dec = do_initial_decryption()</span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> offset <span class="keyword">in</span> <span class="built_in">range</span>(<span class="number">0</span>, <span class="number">0xe0</span> + <span class="number">0x20</span>, <span class="number">0x20</span>):</span><br><span class="line">    <span class="built_in">print</span>(<span class="string">&quot;Offset &quot;</span> + <span class="built_in">hex</span>(offset),</span><br><span class="line">        disass(do_decrypt(dec, offset)),</span><br><span class="line">        sep=<span class="string">&#x27;\n&#x27;</span>)</span><br><span class="line">    <span class="built_in">print</span>(<span class="string">&quot;=&quot;</span>*<span class="number">10</span>)</span><br><span class="line"></span><br><span class="line"><span class="comment"># /!\ Very important when messing around with the Binary Ninja API /!\</span></span><br><span class="line">bv.commit_undo_actions()</span><br></pre></td></tr></table></figure>
+
+<p>This script produces this output :</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br></pre></td><td class="code"><pre><span class="line">Offset <span class="number">0x0</span></span><br><span class="line">temp0.d = ecx</span><br><span class="line">ecx = eax</span><br><span class="line">eax = temp0.d</span><br><span class="line">ebp = (rdi + <span class="number">0x2e988591</span>).d</span><br><span class="line"><span class="keyword">if</span> (flag:s != flag:o) then <span class="number">5</span> <span class="keyword">else</span> <span class="number">6</span> @ <span class="number">0x9</span></span><br><span class="line">jump(<span class="number">0x3c</span>)</span><br><span class="line">temp0.d = [rcx - <span class="number">0x6d2d9af5</span>].d</span><br><span class="line">[rcx - <span class="number">0x6d2d9af5</span>].d = edi</span><br><span class="line">edi = temp0.d</span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0x20</span></span><br><span class="line">rax = pop</span><br><span class="line">st0 = st0 f* <span class="built_in">float</span>.t([rcx + <span class="number">0x499be7f0</span>].d)</span><br><span class="line"><span class="keyword">if</span> (<span class="keyword">not</span>(flag:z) &amp;&amp; flag:s == flag:o) then <span class="number">3</span> <span class="keyword">else</span> <span class="number">4</span> @ <span class="number">0xd</span></span><br><span class="line">jump(<span class="number">0x6e858a3d</span>)</span><br><span class="line">edx = edx ^ eax</span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0x40</span></span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0x60</span></span><br><span class="line">push(rcx)</span><br><span class="line">eax = sbb.d(eax, -<span class="number">0x61b75970</span>, flag:c)</span><br><span class="line">rbx = pop</span><br><span class="line">jump(<span class="number">0x1a1b5d87</span>)</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0x80</span></span><br><span class="line">temp0.b = bl</span><br><span class="line">bl = bl u&gt;&gt; cl</span><br><span class="line">flag:c = unimplemented</span><br><span class="line">[ffffffffaa687d9a].d = sbb.d([ffffffffaa687d9a].d, edx, flag:c)</span><br><span class="line">r13 = r13 + rdi</span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0xa0</span></span><br><span class="line">esi = edi * <span class="number">0x2fcf7038</span></span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0xc0</span></span><br><span class="line">al = sbb.b(al, <span class="number">0x40</span>, flag:c)</span><br><span class="line">temp0.d = ecx</span><br><span class="line">ecx = eax</span><br><span class="line">eax = temp0.d</span><br><span class="line">temp0.b = [rsp + (rax &lt;&lt; <span class="number">1</span>) + <span class="number">0x252aff20</span>].b</span><br><span class="line">[rsp + (rax &lt;&lt; <span class="number">1</span>) + <span class="number">0x252aff20</span>].b = al</span><br><span class="line">al = temp0.b</span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0xe0</span></span><br><span class="line">edx = zx.d(cl)</span><br><span class="line">eax = edx</span><br><span class="line">dl = dl &lt;&lt; <span class="number">3</span></span><br><span class="line">eax = eax u&gt;&gt; <span class="number">5</span></span><br><span class="line">al = al | dl</span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br><span class="line">==========</span><br></pre></td></tr></table></figure>
+
+<p>None of these routines makes sens… except the last one !</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">edx = zx.d(cl)</span><br><span class="line">eax = edx</span><br><span class="line">dl = dl &lt;&lt; <span class="number">3</span></span><br><span class="line">eax = eax u&gt;&gt; <span class="number">5</span></span><br><span class="line">al = al | dl</span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br></pre></td></tr></table></figure>
+
+<p>It takes the first argument <code>cl</code> and basically returns <code>cl &lt;&lt; 3 | cl &gt;&gt; 5</code>. That’s right ! The guess is confirmed !</p>
+<p>Let’s just add</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">offsets = []</span><br><span class="line"></span><br><span class="line">offsets += [ <span class="number">0xe0</span> ]</span><br><span class="line"><span class="comment"># Do the first and last part of `myterious_bunch_of_xors`</span></span><br><span class="line">dec = do_decrypt(do_decrypt(dec, offsets[-<span class="number">1</span>]), offsets[-<span class="number">1</span>] + <span class="number">0x10</span>)</span><br></pre></td></tr></table></figure>
+
+<p>right before the <code>for</code> loop and run the script again :</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line">Offset <span class="number">0x0</span></span><br><span class="line">temp2.d = edx</span><br><span class="line">temp3.d = eax</span><br><span class="line">temp0.d = divs.dp.d(temp2.d:temp3.d, [rcx - <span class="number">0x4c</span>].d)</span><br><span class="line">temp4.d = edx</span><br><span class="line">temp5.d = eax</span><br><span class="line">temp1.d = mods.dp.d(temp4.d:temp5.d, [rcx - <span class="number">0x4c</span>].d)</span><br><span class="line">eax = temp0.d</span><br><span class="line">edx = temp1.d</span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0x20</span></span><br><span class="line">__out_immb_oeax(<span class="number">0xa0</span>, eax, rflags.d)</span><br><span class="line">rdi = pop</span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0x40</span></span><br><span class="line">cl = cl ^ <span class="number">0x26</span></span><br><span class="line">eax = zx.d(cl)</span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0x60</span></span><br><span class="line">__out_dx_al(dx, al, rflags.d)</span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0x80</span></span><br><span class="line">temp0, rdi = __insd(rdi, dx, rflags.d)</span><br><span class="line">[rdi].d = temp0.d</span><br><span class="line">temp0.d = ecx</span><br><span class="line">ecx = eax</span><br><span class="line">eax = temp0.d</span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0xa0</span></span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0xc0</span></span><br><span class="line">[8df7fc620fa3473a].d = eax</span><br><span class="line">dl = sbb.b(dl, [r10].b, flag:c)</span><br><span class="line">rip = __int1()</span><br><span class="line">push(rax)</span><br><span class="line">rbp = pop</span><br><span class="line">undefined</span><br><span class="line">==========</span><br><span class="line">Offset <span class="number">0xe0</span></span><br><span class="line">al = <span class="number">0xcc</span></span><br><span class="line">undefined</span><br><span class="line">==========</span><br></pre></td></tr></table></figure>
+
+<p>Now only the routine decrypted with the switch case <code>0x20</code> (offset <code>0x40</code>) makes sens !</p>
+<p>Let’s repeat this process and at the end we have</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">offsets += [ <span class="number">0xe0</span> ]</span><br><span class="line">dec = do_decrypt(do_decrypt(dec, offsets[-<span class="number">1</span>]), offsets[-<span class="number">1</span>] + <span class="number">0x10</span>)</span><br><span class="line"></span><br><span class="line">offsets += [ <span class="number">0x40</span> ]</span><br><span class="line">dec = do_decrypt(do_decrypt(dec, offsets[-<span class="number">1</span>]), offsets[-<span class="number">1</span>] + <span class="number">0x10</span>)</span><br><span class="line"></span><br><span class="line">offsets += [ <span class="number">0xc0</span> ]</span><br><span class="line">dec = do_decrypt(do_decrypt(dec, offsets[-<span class="number">1</span>]), offsets[-<span class="number">1</span>] + <span class="number">0x10</span>)</span><br><span class="line"></span><br><span class="line">offsets += [ <span class="number">0x00</span> ]</span><br><span class="line">dec = do_decrypt(do_decrypt(dec, offsets[-<span class="number">1</span>]), offsets[-<span class="number">1</span>] + <span class="number">0x10</span>)</span><br><span class="line"></span><br><span class="line">offsets += [ <span class="number">0x20</span> ]</span><br><span class="line">dec = do_decrypt(do_decrypt(dec, offsets[-<span class="number">1</span>]), offsets[-<span class="number">1</span>] + <span class="number">0x10</span>)</span><br><span class="line"></span><br><span class="line">offsets += [ <span class="number">0x80</span> ]</span><br><span class="line">dec = do_decrypt(do_decrypt(dec, offsets[-<span class="number">1</span>]), offsets[-<span class="number">1</span>] + <span class="number">0x10</span>)</span><br><span class="line"></span><br><span class="line">offsets += [ <span class="number">0x60</span> ]</span><br><span class="line">dec = do_decrypt(do_decrypt(dec, offsets[-<span class="number">1</span>]), offsets[-<span class="number">1</span>] + <span class="number">0x10</span>)</span><br><span class="line"></span><br><span class="line">offsets += [ <span class="number">0xa0</span> ]</span><br><span class="line">dec = do_decrypt(do_decrypt(dec, offsets[-<span class="number">1</span>]), offsets[-<span class="number">1</span>] + <span class="number">0x10</span>)</span><br><span class="line"><span class="comment"># No decryption make sens after this ...</span></span><br></pre></td></tr></table></figure>
+
+<p>Which yields the following <code>dec</code> routines :</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Offset 0xe0</span></span><br><span class="line">edx = zx.d(cl)</span><br><span class="line">eax = edx</span><br><span class="line">dl = dl &lt;&lt; <span class="number">3</span></span><br><span class="line">eax = eax u&gt;&gt; <span class="number">5</span></span><br><span class="line">al = al | dl</span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br><span class="line"></span><br><span class="line"><span class="comment">// Offset 0x40</span></span><br><span class="line">cl = cl ^ <span class="number">0x26</span></span><br><span class="line">eax = zx.d(cl)</span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br><span class="line"></span><br><span class="line"><span class="comment">// Offset 0xc0</span></span><br><span class="line">edx = zx.d(cl)</span><br><span class="line">eax = edx</span><br><span class="line">dl = dl &lt;&lt; <span class="number">4</span></span><br><span class="line">eax = eax u&gt;&gt; <span class="number">4</span></span><br><span class="line">al = al | dl</span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br><span class="line"></span><br><span class="line"><span class="comment">// Offset 0x0</span></span><br><span class="line">eax = (rcx + <span class="number">0x37</span>).d</span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br><span class="line"></span><br><span class="line"><span class="comment">// Offset 0x20</span></span><br><span class="line">eax = (rcx + <span class="number">0x7b</span>).d</span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br><span class="line"></span><br><span class="line"><span class="comment">// Offset 0x80</span></span><br><span class="line">edx = zx.d(cl)</span><br><span class="line">eax = edx</span><br><span class="line">dl = dl &lt;&lt; <span class="number">7</span></span><br><span class="line">eax = eax u&gt;&gt; <span class="number">1</span></span><br><span class="line">al = al | dl</span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br><span class="line"></span><br><span class="line"><span class="comment">// Offset 0x60</span></span><br><span class="line">eax = zx.d(cl)</span><br><span class="line">eax = eax * <span class="number">0xad</span></span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br><span class="line"></span><br><span class="line"><span class="comment">// Offset 0xa0</span></span><br><span class="line">edx = zx.d(cl)</span><br><span class="line">eax = edx</span><br><span class="line">dl = dl &lt;&lt; <span class="number">2</span></span><br><span class="line">eax = eax u&gt;&gt; <span class="number">6</span></span><br><span class="line">al = al | dl</span><br><span class="line">&lt;<span class="keyword">return</span>&gt; jump(pop)</span><br></pre></td></tr></table></figure>
+
+<p>Let’s flag this then :</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">def</span> <span class="title function_">dec</span>(<span class="params">c</span>):</span><br><span class="line">    c = ((c &lt;&lt; <span class="number">3</span>) | (c &gt;&gt; <span class="number">5</span>)) &amp; <span class="number">0xFF</span></span><br><span class="line">    c = c ^ <span class="number">0x26</span></span><br><span class="line">    c = ((c &lt;&lt; <span class="number">4</span>) | (c &gt;&gt; <span class="number">4</span>)) &amp; <span class="number">0xFF</span></span><br><span class="line">    c = (c + <span class="number">0x37</span>) &amp; <span class="number">0xFF</span></span><br><span class="line">    c = (c + <span class="number">0x7b</span>) &amp; <span class="number">0xFF</span></span><br><span class="line">    c = ((c &lt;&lt; <span class="number">7</span>) | (c &gt;&gt; <span class="number">1</span>)) &amp; <span class="number">0xFF</span></span><br><span class="line">    c = (c * <span class="number">0xad</span>) &amp; <span class="number">0xFF</span></span><br><span class="line">    c = ((c &lt;&lt; <span class="number">2</span>) | (c &gt;&gt; <span class="number">6</span>)) &amp; <span class="number">0xFF</span></span><br><span class="line">    <span class="keyword">return</span> c</span><br><span class="line"></span><br><span class="line">enc_flag = bv.get_data_var_at(bv.get_symbol_by_raw_name(<span class="string">&quot;flag&quot;</span>).address)</span><br><span class="line">flag = <span class="string">&#x27;&#x27;</span>.join(<span class="built_in">map</span>(<span class="keyword">lambda</span> c: <span class="built_in">chr</span>(dec(c)), enc_flag.value))</span><br><span class="line"><span class="built_in">print</span>(flag)</span><br></pre></td></tr></table></figure>
+
+<p>:3</p>
+<p><img src="/hitcon2022/Untitled%2029.png" alt="Untitled"></p>
+	  
+	</div>
+
+	<div>
+  	<center>
+	<div class="pagination">
+
+    
+    
+    <a type="button" class="btn btn-default disabled"><i class="fa fa-arrow-circle-o-left"></i>Prev</a>
+    
+
+    <a href="/" type="button" class="btn btn-default"><i class="fa fa-home"></i>Home</a>
+    
+    <a href="/2022/08/19/babyfile/" type="button" class="btn btn-default ">Next<i
+                class="fa fa-arrow-circle-o-right"></i></a>
+    
+
+    
+</div>
+
+    </center>
+	</div>
+	
+	<!-- comment -->
+	
+<section id="comment">
+    <h2 class="title">Comments</h2>
+
+    
+</section>
+
+
+	</div> <!-- col-md-9/col-md-12 -->
+		
+	
+	<div id="side_meta">
+		<div class="col-md-3" id="post_meta"> 
+
+	<!-- date -->
+	
+	<div class="meta-widget">
+	<i class="fa fa-clock-o"></i>
+	2022-11-29 
+	</div>
+	
+
+	<!-- categories -->
+    
+
+	<!-- tags -->
+	
+	<div class="meta-widget">
+	<a data-toggle="collapse" data-target="#tags"><i class="fa fa-tags"></i></a>		  
+    <ul id="tags" class="tag_box list-unstyled collapse in">	  
+	    
+  <li><a href="/tags/hitcon-2022/">hitcon-2022<span>1</span></a></li> <li><a href="/tags/reverse-engineering/">reverse-engineering<span>1</span></a></li> <li><a href="/tags/windows-kernel/">windows-kernel<span>1</span></a></li> <li><a href="/tags/static-analysis/">static-analysis<span>1</span></a></li> <li><a href="/tags/metamorphic/">metamorphic<span>1</span></a></li> <li><a href="/tags/driver/">driver<span>1</span></a></li> <li><a href="/tags/binaryninja/">binaryninja<span>1</span></a></li> <li><a href="/tags/0poss/">0poss<span>1</span></a></li>
+    </ul>
+	</div>
+		
+
+	<!-- toc -->
+	<div class="meta-widget">
+	
+	</div>
+	
+    <hr>
+	
+</div><!-- col-md-3 -->
+
+	</div>
+		
+
+</div><!-- row -->
+
+
+
+	</div>
+  </div>
+  <div class="container-narrow">
+  <footer> <p>
+  &copy; 2022 22sh
+  
+  <a href="https://ctftime.org/team/37820" target="_blank">Hegaxon</a>
+</p>
+ </footer>
+</div> <!-- container-narrow -->
+  
+
+
+  
+<a id="gotop" href="#">   
+  <span>⬆︎TOP</span>
+</a>
+
+<script src="/js/jquery.imagesloaded.min.js"></script>
+<script src="/js/gallery.js"></script>
+<script src="/js/bootstrap.min.js"></script>
+<script src="/js/main.js"></script>
+<script src="/js/search.js"></script> 
+
+
+<link rel="stylesheet" href="/fancybox/jquery.fancybox.css" media="screen" type="text/css">
+<script src="/fancybox/jquery.fancybox.pack.js"></script>
+<script type="text/javascript">
+(function($){
+  $('.fancybox').fancybox();
+})(jQuery);
+</script>
+
+
+
+   <script type="text/javascript">      
+     var search_path = "search.xml";
+	 if (search_path.length == 0) {
+	 	search_path = "search.xml";
+	 }
+	 var path = "/" + search_path;
+     searchFunc(path, 'local-search-input', 'local-search-result');
+   </script>
+
+</body>
+   </html>
